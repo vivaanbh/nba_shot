@@ -1,0 +1,407 @@
+---
+title: "NBA Shots Analysis"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Step 1: Logistic Model for Expected Value of a shot being made
+
+```{r}
+#loading required libraries
+library(tidyverse)
+library(RCurl)
+library(ggplot2)
+```
+
+```{r}
+#the data
+library(RCurl)
+link <- getURL("https://raw.githubusercontent.com/M-ttM/Basketball/master/class.csv")
+basket <- read.csv(text = link)
+head(basket)
+```
+
+```{r}
+dim(basket)
+```
+
+```{r}
+#creating variables
+
+#shot type (2 or 3 pointer)
+basket <- basket %>%
+  mutate(shot=as.integer(ifelse(str_detect(type, '3pt'), 3, 2)))
+
+#dummy variable for threepoint shot
+basket <- basket %>% 
+  mutate(threept=as.integer(ifelse(str_detect(type, '3pt'), 1, 0)))
+
+#minutes remaining (as an integer)
+basket <- basket %>% 
+  mutate(timemin = as.integer(timenum/60))
+
+#horizontal distance from basket
+basket <- basket %>% 
+  mutate(x_1 = as.integer(abs(25 - x)))
+
+#vertical distance from basket
+basket <- basket %>% 
+  mutate(y_1 = as.integer(abs(5 - y)))
+
+#dummy variable indicating overtime
+basket <- basket %>% 
+  mutate(overtime=as.integer(ifelse(period==5, 1, 0)))
+
+#dummy varaiable indicating whether a basket was made
+basket <- basket %>% 
+  mutate(made=as.integer(ifelse(points==0, 0, 1)))
+```
+
+
+```{r}
+#mapping coordinates of the basketball court
+ggplot(data = basket, aes(x = x, y = y, colour=threept)) +
+geom_point() + geom_point(x = 25, y = 5, colour='red')
+
+```
+
+The output above shows the basketball court on a x-y plane, with the basket being at (25,5), marked as red. The black dots are shots that were two pointers, and blue are three pointers. The visualisation helps in understanding the mapping of the court in this data.
+
+```{r}
+#mapping whether a shot was made
+ggplot(data = basket, aes(x = x, y = y, colour=made)) +
+geom_point() + geom_point(x = 25, y = 5, colour='red')
+
+```
+This visualization shows the points on the court-map of shots that were made (blue) or not (black). 
+
+```{r}
+#shot map of the goat
+kobe <- basket %>%
+  filter(player=='Kobe Bryant')
+
+ggplot(data = kobe, aes(x = x, y = y, colour=made)) +
+geom_point() + geom_point(x = 25, y = 5, colour='red')
+
+```
+
+
+```{r}
+half_court <- filter(basket, y>45)
+filter(basket, (y_1>65 & made==1))
+filter(basket, (x_1>25 & made==1))
+```
+From the code above, we can see that out of close to 200,000 observations, no shot was made 65 units away vertically from the basket; and 25 units away horizontally. These shots can be considered with large amount of data as shots that have extremely low probability of being made. Its not observed in the data, and hence, the model as well will learn accordingly.
+
+```{r}
+filter(half_court, timenum>2)
+```
+
+```{r}
+made_half <- half_court %>% 
+  filter(made==1)
+
+print(t(made_half['time']))
+```
+The first output shows that only 9 shots (0.004% of shots) were taken behind the half line, when it wasn't the last couple seconds of the quarter. The second output shows that, only 17 shots were made behind the half line and one unique observation made the shot when it was not the last seconds of the quarter. 
+
+This implies that shots behind the half line are taken simply because there is no additional time left to travel further and is extremely unlikely to be made.
+
+For the purposes of our model, we will assess shots that were taken inside the half of the opponent. 
+
+```{r}
+basket_new <- basket %>%
+  filter(y<=45 & x_1<=25)
+```
+
+
+```{r}
+dunk_dt <- basket_new %>% 
+  filter(str_detect(type, 'dunk'))
+
+summary(dunk_dt['made'])
+dim(dunk_dt)
+```
+
+It also seems like dunks are usually made, with 91.29% of dunks attempted being made.
+
+```{r}
+basket_new <- basket_new %>%
+  mutate(dunk=ifelse(str_detect(type, 'dunk'), 1, 0))
+```
+
+
+
+```{r}
+a <- basket_new %>% 
+  select(X, period, x, y, timenum, timemin, x_1, y_1, threept, overtime, dunk, made)
+
+summary(a)
+```
+The distributions of the variables in the data are shown above. It appears that slightly more shots are taken
+towards the second half of the game. 25% of shots are taken very close to the basket; 50% are taken with the coordinate (6,5);
+and 75% of shots are taken within (14, 15). It is tough to determine which coordinates signal to three pointers, 
+but since 22% of shots are three pointers, the (14, 15) coordinate could signal to a potential three point line estimate.  
+
+```{r}
+b <- a %>%
+  arrange(made) %>%
+  group_by(made) %>%
+  summarise(mean_period=mean(period), mean_timemin=mean(timemin),
+            mean_x_1=mean(x_1), mean_y_1=mean(y_1),
+            mean_three=mean(threept), mean_ot=mean(overtime),
+            mean_dunk=mean(dunk))
+            
+```
+
+```{r}
+b
+```
+
+The output above shows the average of the variables. The average shot missed was shot further by at least 2 units on average than an average shot that was made. A three pointer is a difficult shot with 17% of shots made being three pointers and 26% of shots that were not made were three pointers. 10% of shots made were dunks and only 0.7% of shots that were not made were dunks. This implies that dunk is an easier shot.
+
+The variables we select are: 
+- Quarter given by the variable *period*.
+- The Minute of the game in the quarter. The variable show how many minutes are left in the quarter, given as an integer by *timemin*.
+- The horizontal distance from the basket, given by the transformed *X_1* coordinate.
+- The vertical distance from the basket, measured by the transformed *y_1* coordinate. 
+- Whether a shot taken was a three-pointer, given by the variable *threept*.
+- Whether a shot taken was a dunk, given by the *dunk* variable
+- A dummy variable to indicate whether a shot was taken in *overtime* (Quarter = 5).
+
+
+The logistic regression model is below:
+
+$$  \log(\dfrac{P(make=1)}{1-P(make=1)}) = \beta_0+\beta_1*period +\beta_2*timemin +\beta_3*x_1 +\beta_4*y_1 +\beta5*threept +\beta_6*dunk +\beta_7*overtime  + e $$
+#fitting the model using logistic regression
+```{r}
+fit.1 <- glm(made ~ period + timemin + x_1 + y_1 + threept + dunk + overtime, data = basket_new, family = "binomial")
+summary(fit.1)
+```
+
+All variables except overtime are statistically significant. This could be due to lack of data for overtime and the fact that overtime lasts for only 5 minutes. 
+
+The following model is produced:
+$$  \log(\dfrac{P(made=1)}{1-P(made=1)}) = 0.2 -0.032*period +0.008*timemin -0.025*x_1 -0.026*y_1 +0.09*threept +2.21*dunk  -0.033*overtime $$
+From the coefficients, we can understand the effect of a variable of the log-odds of a basket. Positive coefficients indicate a positive relationship with the log-odds of a basket being made (success), and vica versa. 
+
+```{r}
+exp(fit.1$coeff)
+exp(confint(fit.1))
+```
+Since the model is expressed in log-odds, we exponentiate the coefficients to better understand the model. 
+
+$$  \frac{P(success=1)}{1-P(success=1)} = 1.23 +0.97*period +1.008*timemin +0.975*x_1 +0.973*y_1 +1.1*threept +9.09*dunk  +0.967*overtime + e$$
+
+When expressed in exponent terms, coefficients greater than 1 increase the odds of a basket being made and inversely a coefficient below 1 reduces the odds of a basket being made. From the coefficients of coordinates, it can be interpreted that a shot taken a unit further vertically or horizontally affects the odds of making a basket negatively (by approximately 3% on average). Fatigue plays a role in shot being made. This is indicated by the time variables. A shot has 3% lower odds of being made as the quarters go on; and the impact of minutes remaining in the quarter is weak, but significant, on odds, with a lower odds as the minutes tick down.  
+
+Odds are negatively impacted in overtime as predicted by the model. This relationship is not statistically significant. These finding indicate that fatigue reduces the odds of a shot being made. 
+
+Interestingly, three point shots have 10% higher odds of being made. This relationship is statistically significant. The prediction by the model could be due to three point shots being practiced more, and are usually taken by 'three-point specialists' in the team. The model predicts that a dunk increases the odds 9 times, which indicates that dunk shots will have a higher predicted value of being made.   
+
+```{r}
+basket_new <- basket_new %>% 
+  mutate(expectedmakes1 = fitted(fit.1))
+basket_new <- basket_new %>% 
+  mutate(extramakes1 = made-expectedmakes1)
+
+ggplot(basket_new, aes(expectedmakes1)) + 
+  geom_histogram()
+ggplot(basket_new, aes(extramakes1)) + 
+  geom_histogram()
+```
+
+```{r}
+ggplot(basket_new,aes(timemin, expectedmakes1, colour=threept)) + geom_point()
+```
+```{r}
+ggplot(basket_new,aes(threept, expectedmakes1)) + geom_point()
+```
+```{r}
+ggplot(basket_new,aes(threept, expectedmakes1 ,color=period)) + geom_point() + scale_color_gradient(low = "yellow", high = "darkblue")
+```
+```{r}
+ggplot(basket_new,aes(dunk, expectedmakes1, colour='orange')) + geom_point()
+```
+```{r}
+ggplot(basket_new,aes(x, expectedmakes1, colour='orange')) + geom_point()
+```
+```{r}
+ggplot(basket_new,aes(y, expectedmakes1, colour='orange')) + geom_point()
+```
+```{r}
+ggplot(basket_new,aes(overtime, expectedmakes1, colour='orange')) + geom_point()
+```
+
+
+#Step 2: Heat maps
+
+```{r}
+basket_new <- basket_new %>% 
+  mutate(exp_pts = ifelse(threept==1, (expectedmakes1*3), (expectedmakes1*2)))
+```
+
+```{r}
+ggplot(data = basket_new, aes(x = x, y = y, colour=exp_pts)) +
+geom_point() + geom_point(x = 25, y = 5, colour='green') + scale_color_gradient(low = "orange", high = "darkblue", n.breaks=5)
+```
+
+```{r}
+coord_shot <- basket_new %>%
+  group_by(x, y) %>%
+  summarize(n=n())
+
+yscale <- coord_shot %>%
+  filter(y>7)
+ggplot(data = yscale, aes(x = x, y = y, colour=n)) +
+geom_point() + scale_color_gradient(low = "orange", high = "darkblue", n.breaks=10)
+
+```
+From the two visualizations, we can see that shots that were made right around the basket (including dunks) have high expected point values. For two pointers, we do see the gradient going towards 'orange' as we approach the three point line. This indicates that two point shots taken away from the basket have low expected points. Three pointers are best when shot from the edge of the line. 
+
+This is also shown in the second output which shows the number of shots by location. Most shots are taken as dunks/layups and three pointers (at the edge of the line).
+
+The implication from this is that shots have high value when they are dunks or three pointers. Layups can also be included in this as those shots are made near the basket. Shots that are made inside the three point line have lower expected points. The ratio, for eg, a 0.6 expected shot, inside the three point line, has a ratio of 0.3; and a shot made from the edge (a three pointer) with an expected value of 1.5 has a ratio of 0.5. It is also worth mentioning that dots that have a shade of purple inside the two point line have a ratio or expected value of at least 50% of the points available. 
+
+Three point shots have more value than two point shots taken close to the three point line. Dunks and layups have maximum value. 
+
+#Step 3: Shot charts
+
+```{r}
+basket_new <- basket_new %>%
+  mutate(resd=(shot - exp_pts))
+```
+
+#PLAYER : KOBE BRYANT
+
+```{r}
+kobe <- basket_new %>%
+  filter(player=='Kobe Bryant')
+```
+
+```{r}
+ggplot(data = kobe, aes(x = x, y = y, colour=exp_pts)) +
+geom_point() + geom_point(x = 25, y = 5, colour='green') + scale_color_gradient(low = "orange", high = "darkblue")
+```
+```{r}
+ggplot(data = kobe, aes(x = x, y = y, colour=resd)) +
+geom_point() + geom_point(x = 25, y = 5, colour='green') + scale_color_gradient(low = "orange", high = "darkblue")
+
+ggplot(data = kobe, aes(x = x, y = y, colour=extramakes1)) +
+geom_point() + geom_point(x = 25, y = 5, colour='green') + scale_color_gradient(low = "orange", high = "darkblue")
+```
+
+
+#Step 4: Fixed effects regression
+
+
+```{r}
+player_800 <- basket_new %>%
+  group_by(player) %>%
+  summarize(n=n())
+
+player_800 <- player_800 %>%
+  filter(n>800)
+
+player_800
+```
+```{r}
+pl_800 <- list(player_800$player)
+
+basket_800 <- merge(basket_new, player_800, by.y = 'player')
+```
+
+```{r}
+length(unique(basket_800$player))
+```
+```{r}
+fit.2 <- glm(made ~ period + timemin + x_1 + y_1 + threept + dunk + overtime + factor(player), data = basket_800, family = "binomial")
+```
+```{r}
+sigball <- summary(fit.2)$coefficients[summary(fit.2)$coefficients[,4] <.05,]
+sigball
+```
+
+```{r}
+sigball <- data.frame(sigball)
+sigball$Estimate <- exp(sigball$Estimate)
+```
+
+```{r}
+sigball %>% select(Estimate) %>%
+  arrange(-Estimate)
+```
+Conditional on the shot being taken by a player who had taken more than 800 shots in 2009, if that specific player was Steve Nash, Beno Udrih, or Steph Curry, it would positively affect the odds of the shot being made. They increase the odds by 43%, 28% and 17% respectively. ALl other players who would be taking that shot (in the 800 shot category) have a negative effect on odds. This goes to show the quality that Steve Nash, Beno Udrih and Steph Curry possess and effectiveness of their shot making in 2009. 
+
+#Step 5: Correlations
+How correlated, by location, is shot frequency with value?
+With a regression, predict shot frequency by location with shot value by location. How do you interpret the coefficient?
+Do the same for the player you chose in step 3.
+
+```{r}
+coord_shot <- basket_new %>%
+  group_by(x, y) %>%
+  summarize(n=n(), value=(mean(exp_pts)))
+
+coord_shot
+```
+
+```{r}
+coord_shot <- data.frame(coord_shot)
+coord_shot <- coord_shot %>% filter(n<1500)
+```
+
+
+```{r}
+cor(coord_shot$n, coord_shot$value)
+```
+
+```{r}
+ggplot(coord_shot, aes(x=n, value, colour='orange')) + geom_point() + xlim(0, 600)
+```
+
+
+```{r}
+linearDist <- lm(n ~ value, data = coord_shot)
+summary(linearDist)
+coord_shot <- coord_shot %>% 
+  mutate(LinearPrediction = fitted(linearDist))
+```
+
+The regression shows a positive relation of number of shots by location with value by location. FOr every 0.1 increase in value, the number of shots taken from that location increases by 15 on average. 
+
+```{r}
+kobe_shot <- kobe %>%
+  group_by(x, y) %>%
+  summarize(n=n(), value=(mean(exp_pts)))
+
+kobe_shot
+```
+
+```{r}
+kobe_shot <- data.frame(kobe_shot)
+```
+
+
+```{r}
+cor(kobe_shot$n, kobe_shot$value)
+```
+
+```{r}
+ggplot(kobe_shot, aes(x=value, n, colour='orange')) + geom_point() + ylim(0, 20)
+```
+
+```{r}
+linearDist <- lm(n ~ value, data = kobe_shot)
+summary(linearDist)
+coord_shot <- kobe_shot %>% 
+  mutate(LinearPrediction = fitted(linearDist))
+```
+
+The lowest value of a shot that has been taken from a spot where the player has previously shot from, is greater than the lowest value for a shot from a spot where they haven't taken a shot.
+
