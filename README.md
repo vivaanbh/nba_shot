@@ -6,6 +6,8 @@ Contents:
 - **Heat Maps**: measure for expected points contingent on whether a shot was a 2 or 3-pointer; visualizations - expected points/no. of points by location.
 - **Shot Charts**: creating a variable to account for an above-average shot; visualisation of Kobe Bryant's shots by location, one for raw value per shot and a second for the above-average analytic. 
 - **Fixed Effects Regressions**: focusing on players with over 800 shots; re-run model with fixed effects for each player.
-- **Correlations**: 
+- **Correlations**: checking how correlated is frequency of shot with value, by location and creating a regression model for the same. This is done for Kobe Bryant as well.
+
+This project depicts how statistical analysis and visualisations can be used to make inferences about shots in the NBA. This can be done on a general level, and on an indivdual level as shown by the Kobe Bryant example.
 
 
